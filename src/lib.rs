@@ -835,7 +835,6 @@ impl Templates {
             })?;
             let template = Object::new_external(file)?;
             self.cache.insert(filename.to_string(), template.clone());
-            println!("llkjhlkj {}", template.name);
             Ok(template)
         }
     }
@@ -949,13 +948,8 @@ impl Object {
             TiledError::MalformedAttributes("objects must have an x and a y number".to_string())
         );
 
-        println!("{}", n.clone().unwrap_or("default".to_string()));
-
         let tobj = if let (Some(tl), Some(templates)) = (tl.as_ref(), templates) {
-            templates.load(tl).map(|o| {
-                println!("o: {}", o.name);
-                Some(o)
-            })?
+            templates.load(tl).map(|o| Some(o))?
         } else {
             None
         };
