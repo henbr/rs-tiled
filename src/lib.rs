@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufReader, Error, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use xml::attribute::OwnedAttribute;
 use xml::reader::XmlEvent;
@@ -256,6 +256,7 @@ impl Map {
         let mut properties = HashMap::new();
         let mut object_groups = Vec::new();
         let mut layer_index = 0;
+        let mut templates = Some(Templates::new(map_path));
         parse_tag!(parser, "map", {
             "tileset" => | attrs| {
                 tilesets.push(Tileset::new(parser, attrs, map_path)?);
@@ -276,7 +277,7 @@ impl Map {
                 Ok(())
             },
             "objectgroup" => |attrs| {
-                object_groups.push(ObjectGroup::new(parser, attrs, Some(layer_index))?);
+                object_groups.push(ObjectGroup::new(parser, attrs, Some(layer_index), &mut templates)?);
                 layer_index += 1;
                 Ok(())
             },
@@ -294,7 +295,7 @@ impl Map {
             object_groups,
             properties,
             background_colour: c,
-            infinite: infinite.unwrap_or(false)
+            infinite: infinite.unwrap_or(false),
         })
     }
 
@@ -550,6 +551,7 @@ impl Tile {
         let mut properties = HashMap::new();
         let mut objectgroup = None;
         let mut animation = None;
+        let mut templates: Option<Templates> = None;
         parse_tag!(parser, "tile", {
             "image" => |attrs| {
                 images.push(Image::new(parser, attrs)?);
@@ -560,7 +562,7 @@ impl Tile {
                 Ok(())
             },
             "objectgroup" => |attrs| {
-                objectgroup = Some(ObjectGroup::new(parser, attrs, None)?);
+                objectgroup = Some(ObjectGroup::new(parser, attrs, None, &mut templates)?);
                 Ok(())
             },
             "animation" => |_| {
@@ -711,7 +713,7 @@ impl Layer {
 #[derive(Debug, PartialEq, Clone)]
 pub enum LayerData {
     Finite(Vec<Vec<LayerTile>>),
-    Infinite(HashMap<(i32, i32), Chunk>)
+    Infinite(HashMap<(i32, i32), Chunk>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -723,11 +725,10 @@ pub struct Chunk {
     pub tiles: Vec<Vec<LayerTile>>,
 }
 
-
 impl Chunk {
     pub(crate) fn new<R: Read>(
         parser: &mut EventReader<R>,
-        attrs: Vec<OwnedAttribute>,    
+        attrs: Vec<OwnedAttribute>,
         encoding: Option<String>,
         compression: Option<String>,
     ) -> Result<Chunk, TiledError> {
@@ -743,20 +744,17 @@ impl Chunk {
             TiledError::MalformedAttributes("layer must have a name".to_string())
         );
 
-       
-
         let tiles = parse_data_line(encoding, compression, parser, width)?;
-        
+
         Ok(Chunk {
-                x,
-                y,
-                width,
-                height,
-                tiles,
-            })
+            x,
+            y,
+            width,
+            height,
+            tiles,
+        })
     }
 }
-
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ImageLayer {
@@ -813,6 +811,36 @@ impl ImageLayer {
     }
 }
 
+struct Templates {
+    cache: HashMap<String, Object>,
+    map_path: Option<PathBuf>,
+}
+
+impl Templates {
+    fn new(map_path: Option<&Path>) -> Self {
+        Self {
+            cache: HashMap::new(),
+            map_path: map_path.map_or(None, |path| Some(path.to_path_buf())),
+        }
+    }
+
+    fn load(&mut self, filename: &str) -> Result<Object, TiledError> {
+        let template = self.cache.get(filename);
+        if let Some(template) = template {
+            Ok(template.clone())
+        } else {
+            let path = self.map_path.clone().ok_or(TiledError::Other("Maps with external templates must know their file location.  See parse_with_path(Path).".to_string()))?.with_file_name(filename);
+            let file = File::open(&path).map_err(|_| {
+                TiledError::Other(format!("External template file not found: {:?}", path))
+            })?;
+            let template = Object::new_external(file)?;
+            self.cache.insert(filename.to_string(), template.clone());
+            println!("llkjhlkj {}", template.name);
+            Ok(template)
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct ObjectGroup {
     pub name: String,
@@ -832,6 +860,7 @@ impl ObjectGroup {
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
         layer_index: Option<u32>,
+        templates: &mut Option<Templates>,
     ) -> Result<ObjectGroup, TiledError> {
         let ((o, v, c, n), ()) = get_attrs!(
             attrs,
@@ -848,7 +877,7 @@ impl ObjectGroup {
         let mut properties = HashMap::new();
         parse_tag!(parser, "objectgroup", {
             "object" => |attrs| {
-                objects.push(Object::new(parser, attrs)?);
+                objects.push(Object::new(parser, attrs, templates)?);
                 Ok(())
             },
             "properties" => |_| {
@@ -891,14 +920,16 @@ pub struct Object {
     pub visible: bool,
     pub shape: ObjectShape,
     pub properties: Properties,
+    pub template: String,
 }
 
 impl Object {
     fn new<R: Read>(
         parser: &mut EventReader<R>,
         attrs: Vec<OwnedAttribute>,
+        templates: &mut Option<Templates>,
     ) -> Result<Object, TiledError> {
-        let ((id, gid, n, t, w, h, v, r), (x, y)) = get_attrs!(
+        let ((id, gid, n, t, w, h, v, r, tl, x, y), ()) = get_attrs!(
             attrs,
             optionals: [
                 ("id", id, |v:String| v.parse().ok()),
@@ -907,25 +938,44 @@ impl Object {
                 ("type", obj_type, |v:String| v.parse().ok()),
                 ("width", width, |v:String| v.parse().ok()),
                 ("height", height, |v:String| v.parse().ok()),
-                ("visible", visible, |v:String| v.parse().ok()),
+                ("visible", visible, |v:String| v.parse().ok().map(|x:i32| x == 1)),
                 ("rotation", rotation, |v:String| v.parse().ok()),
-            ],
-            required: [
+                ("template", template, |v:String| v.parse().ok() as Option<String>),
                 ("x", x, |v:String| v.parse().ok()),
                 ("y", y, |v:String| v.parse().ok()),
             ],
+            required: [
+            ],
             TiledError::MalformedAttributes("objects must have an x and a y number".to_string())
         );
-        let v = v.unwrap_or(true);
-        let w = w.unwrap_or(0f32);
-        let h = h.unwrap_or(0f32);
-        let r = r.unwrap_or(0f32);
+
+        println!("{}", n.clone().unwrap_or("default".to_string()));
+
+        let tobj = if let (Some(tl), Some(templates)) = (tl.as_ref(), templates) {
+            templates.load(tl).map(|o| {
+                println!("o: {}", o.name);
+                Some(o)
+            })?
+        } else {
+            None
+        };
+
+        let tobj = tobj.as_ref();
+        let x = x.unwrap_or(0f32);
+        let y = y.unwrap_or(0f32);
+        let v = v.unwrap_or(tobj.map_or(true, |v| v.visible));
+        let w = w.unwrap_or(tobj.map_or(0f32, |v| v.width));
+        let h = h.unwrap_or(tobj.map_or(0f32, |v| v.height));
+        let r = r.unwrap_or(tobj.map_or(0f32, |v| v.rotation));
         let id = id.unwrap_or(0u32);
-        let gid = gid.unwrap_or(0u32);
-        let n = n.unwrap_or(String::new());
-        let t = t.unwrap_or(String::new());
-        let mut shape = None;
-        let mut properties = HashMap::new();
+        let gid = gid.unwrap_or(0u32); // TODO: Figure out good way to load tileset from template
+        let n = n.unwrap_or(tobj.map_or(String::new(), |v| v.name.clone()));
+        let t = t.unwrap_or(tobj.map_or(String::new(), |v| v.obj_type.clone()));
+        let tl = tl.unwrap_or(String::new());
+        let mut shape = tobj.map_or(None, |v| Some(v.shape.clone()));
+        let mut properties = tobj
+            .as_ref()
+            .map_or(HashMap::new(), |v| v.properties.clone());
 
         parse_tag!(parser, "object", {
             "ellipse" => |_| {
@@ -948,7 +998,8 @@ impl Object {
                 Ok(())
             },
             "properties" => |_| {
-                properties = parse_properties(parser)?;
+                let parsed_props = parse_properties(parser)?;
+                properties.extend(parsed_props);
                 Ok(())
             },
         });
@@ -971,7 +1022,30 @@ impl Object {
             visible: v,
             shape: shape,
             properties: properties,
+            template: tl.clone(),
         })
+    }
+
+    fn new_external<R: Read>(file: R) -> Result<Object, TiledError> {
+        let mut parser = EventReader::new(file);
+        let mut templates: Option<Templates> = None;
+        loop {
+            match parser.next().map_err(TiledError::XmlDecodingError)? {
+                XmlEvent::StartElement {
+                    name, attributes, ..
+                } => {
+                    if name.local_name == "object" {
+                        return Object::new(&mut parser, attributes, &mut templates);
+                    }
+                }
+                XmlEvent::EndDocument => {
+                    return Err(TiledError::PrematureEnd(
+                        "Template Document ended before template was parsed".to_string(),
+                    ))
+                }
+                _ => {}
+            }
+        }
     }
 
     fn new_polyline(attrs: Vec<OwnedAttribute>) -> Result<ObjectShape, TiledError> {
@@ -1075,12 +1149,12 @@ fn parse_infinite_data<R: Read>(
         required: [],
         TiledError::MalformedAttributes("data must have an encoding and a compression".to_string())
     );
-    
+
     let mut chunks = HashMap::<(i32, i32), Chunk>::new();
     parse_tag!(parser, "data", {
         "chunk" => |attrs| {
-            let chunk = Chunk::new(parser, attrs, e.clone(), c.clone())?;            
-            chunks.insert((chunk.x, chunk.y), chunk);            
+            let chunk = Chunk::new(parser, attrs, e.clone(), c.clone())?;
+            chunks.insert((chunk.x, chunk.y), chunk);
             Ok(())
         }
     });
@@ -1108,7 +1182,12 @@ fn parse_data<R: Read>(
     Ok(LayerData::Finite(tiles))
 }
 
-fn parse_data_line<R: Read>(encoding: Option<String>, compression: Option<String>, parser: &mut EventReader<R>, width: u32) -> Result<Vec<Vec<LayerTile>>, TiledError> {
+fn parse_data_line<R: Read>(
+    encoding: Option<String>,
+    compression: Option<String>,
+    parser: &mut EventReader<R>,
+    width: u32,
+) -> Result<Vec<Vec<LayerTile>>, TiledError> {
     match (encoding, compression) {
         (None, None) => {
             return Err(TiledError::Other(

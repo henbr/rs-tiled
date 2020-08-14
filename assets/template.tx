@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<template>
+ <object name="object1" rotation="45" visible="0">
+  <polygon points="5,5 30,-5 35,20 15,30 20,10"/>
+ </object>
+</template>

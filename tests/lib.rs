@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::path::Path;
-use tiled::{parse, parse_file, parse_tileset, Map, PropertyValue, TiledError, LayerData};
+use tiled::{parse, parse_file, parse_tileset, LayerData, Map, PropertyValue, TiledError};
 
 fn read_from_file(p: &Path) -> Result<Map, TiledError> {
     let file = File::open(p).unwrap();
@@ -38,7 +38,7 @@ fn test_just_tileset() {
 
 #[test]
 fn test_infinite_tileset() {
-    let r = read_from_file_with_path(&Path::new("assets/tiled_base64_zlib_infinite.tmx")).unwrap();    
+    let r = read_from_file_with_path(&Path::new("assets/tiled_base64_zlib_infinite.tmx")).unwrap();
 
     if let LayerData::Infinite(chunks) = &r.layers[0].tiles {
         assert_eq!(chunks.len(), 4);
@@ -50,7 +50,6 @@ fn test_infinite_tileset() {
         assert_eq!(chunks[&(-32, 32)].height, 32);
     } else {
         assert!(false, "It is wrongly recognized as a finite map");
-
     }
 }
 
@@ -122,7 +121,7 @@ fn test_tileset_property() {
 #[test]
 fn test_flipped_gid() {
     let r = read_from_file_with_path(&Path::new("assets/tiled_flipped.tmx")).unwrap();
-    
+
     if let LayerData::Finite(tiles) = &r.layers[0].tiles {
         let t1 = tiles[0][0];
         let t2 = tiles[0][1];
@@ -146,5 +145,32 @@ fn test_flipped_gid() {
     } else {
         assert!(false, "It is wrongly recognized as an infinite map");
     }
-    
+}
+
+#[test]
+fn test_object_templates() {
+    let map = read_from_file_with_path(&Path::new("assets/tiled_object_templates.tmx")).unwrap();
+    let objects = &map.object_groups[0].objects;
+
+    let obj1 = objects.iter().find(|o| o.id == 1).unwrap();
+    assert_eq!(obj1.name, "object1");
+    assert_eq!(obj1.visible, false);
+    assert!((obj1.rotation - 45.0).abs() <= std::f32::EPSILON);
+    match &obj1.shape {
+        tiled::ObjectShape::Polygon { points } => {
+            assert!((points[0].0 - 5.0).abs() <= std::f32::EPSILON);
+        }
+        _ => assert!(false, "Excpected polygon, got something else"),
+    }
+
+    let obj2 = objects.iter().find(|o| o.id == 2).unwrap();
+    assert_eq!(obj2.name, "object2");
+    assert_eq!(obj2.visible, false);
+    assert!((obj2.rotation - 10.0).abs() <= std::f32::EPSILON);
+    match &obj2.shape {
+        tiled::ObjectShape::Polygon { points } => {
+            assert!((points[0].0 + 7.0).abs() <= std::f32::EPSILON);
+        }
+        _ => assert!(false, "Excpected polygon, got something else"),
+    }
 }

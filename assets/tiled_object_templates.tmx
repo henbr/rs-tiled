@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.4" tiledversion="1.4.1" orientation="orthogonal" renderorder="right-down" width="10" height="10" tilewidth="32" tileheight="32" infinite="0" nextlayerid="4" nextobjectid="6">
+ <objectgroup id="3" name="objects">
+  <properties>
+   <property name="an object group property" type="bool" value="true"/>
+  </properties>
+  <object id="1" template="template.tx" x="100" y="200"/>
+  <object id="2" template="template.tx" name="object2" x="190" y="200" rotation="10" visible="false">
+   <polygon points="-7,-5 30,-5 35,20 15,30 20,10"/>
+  </object>
+ </objectgroup>
+</map>
